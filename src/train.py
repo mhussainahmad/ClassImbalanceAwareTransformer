@@ -389,6 +389,10 @@ def main():
                 quota=quota,
                 auto_balance_to_majority=autobalance,   
             )
+            torch.save(
+                diffusion_model.state_dict(),
+                os.path.join(results_dir, "diffusion_state_dict.pt")
+            )
             sampler_for_train = getattr(diffusion_model, "ddim_sample_raw", diffusion_model.ddim_sample)
 
             model.train()
