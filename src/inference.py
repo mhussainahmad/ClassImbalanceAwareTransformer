@@ -26,18 +26,12 @@ def set_seed(seed: int):
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Inference: per-fault accuracy + t-SNE with diffusion samples"
+        description="Inference: per fault accuracy + t-SNE with diffusion samples"
     )
     p.add_argument(
         "--config",
         type=str,
         default=str(Path(__file__).parent.parent / "config.yaml"),
-    )
-    p.add_argument(
-        "--results-dir",
-        type=str,
-        default=str(Path(__file__).parent.parent / "results"),
-        help="Folder that contains best_state_dict.pt and diffusion_state_dict.pt",
     )
     p.add_argument(
         "--n-normal",
@@ -80,35 +74,44 @@ def main():
     with open(cfg_path, "r") as f:
         cfg = yaml.safe_load(f)
 
-    results_dir = str(args.results_dir)
-    os.makedirs(results_dir, exist_ok=True)
-
-    best_ckpt = os.path.join(results_dir, "best_state_dict.pt")
-    diff_ckpt = os.path.join(results_dir, "diffusion_state_dict.pt")
+    # Hardcoded checkpoints in repo root
+    best_ckpt = "/workspace/ClassImbalanceAwareTransformer/best_state_dict.pt"
+    diff_ckpt = "/workspace/ClassImbalanceAwareTransformer/diffusion_state_dict.pt"
 
     if not os.path.exists(best_ckpt):
-        raise FileNotFoundError(f"best_state_dict.pt not found in results_dir: {results_dir}")
+        raise FileNotFoundError(f"best_state_dict.pt not found at: {best_ckpt}")
     if not os.path.exists(diff_ckpt):
-        raise FileNotFoundError(f"diffusion_state_dict.pt not found in results_dir: {results_dir}")
+        raise FileNotFoundError(f"diffusion_state_dict.pt not found at: {diff_ckpt}")
 
-    # === DATA: use exactly the same config as training ===
-    ff_path = cfg["dataset"]["ff_path"]
-    ft_path = cfg["dataset"]["ft_path"]
+    # Figures directory
+    fig_dir = "/workspace/ClassImbalanceAwareTransformer/figures"
+    os.makedirs(fig_dir, exist_ok=True)
 
+    # === DATA: hardcoded testing files and test slicing ===
+
+    # Hardcoded testing RData paths
+    ff_path = "/workspace/TEP_FaultFree_Testing.RData"
+    ft_path = "/workspace/TEP_Faulty_Testing.RData"
+
+    # Use windowing settings from config
     window_size = cfg["data_windowing"]["window_size"]
     stride = cfg["data_windowing"]["stride"]
     post_fault_start = cfg["data_windowing"]["post_fault_start"]
 
-    train_runs = range(
-        cfg["data_windowing"]["train_runs_start"],
-        cfg["data_windowing"]["train_runs_end"],
-    )
-    test_runs = range(
-        cfg["data_windowing"]["test_runs_start"],
-        cfg["data_windowing"]["test_runs_end"],
-    )
+    # Hardcoded test selection for fault 0
+    normal_test_start = 1
+    normal_test_end = 50000
+    train_runs_end = 10
+    post_fault_start = 160
+    test_runs_start: 1
+    test_runs_end: 20
+    # Hardcoded faulty test runs
+    test_runs = range(1, 40)
 
-    # same call as in training main()
+    # No training runs needed for inference, but load_sampled_data
+    # still returns a "train" part that we only use to get input_dim
+    train_runs = []
+
     (X_train, y_train, _), (X_test, y_test, _) = load_sampled_data(
         window_size=window_size,
         stride=stride,
@@ -117,6 +120,8 @@ def main():
         post_fault_start=post_fault_start,
         train_runs=train_runs,
         test_runs=test_runs,
+        normal_test_start=normal_test_start,
+        normal_test_end=normal_test_end,
     )
 
     print("Inference X_test shape:", X_test.shape)
@@ -124,11 +129,19 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # === MODEL + COSINE HEAD (same as training) ===
-    num_classes = int(y_train.max()) + 1
+    # === Load checkpoint first, to derive num_classes from it ===
+    clf_state = torch.load(best_ckpt, map_location=device)
 
+    # classifier.3.weight has shape [num_classes, hidden_dim]
+    if "classifier.3.weight" not in clf_state:
+        raise KeyError("classifier.3.weight not found in checkpoint; cannot infer num_classes")
+
+    num_classes = clf_state["classifier.3.weight"].shape[0]
+    input_dim = X_train.shape[2]
+
+    # === MODEL + COSINE HEAD (same as training) ===
     model = SelfGatedHierarchicalTransformerEncoder(
-        input_dim=X_train.shape[2],
+        input_dim=input_dim,
         num_classes=num_classes,
     ).to(device)
 
@@ -137,7 +150,7 @@ def main():
         x0 = torch.from_numpy(X_train[:1]).float().to(device)
         feat_dim = model.forward_features(x0).shape[-1]
 
-    # attach cosine-margin head exactly like training
+    # cosine margin head configuration
     mcfg = cfg.get("model", {})
     base_m = float(mcfg.get("m", 0.15))
     s_val = float(mcfg.get("s", 16.0))
@@ -151,7 +164,7 @@ def main():
         margin_type=margin_type,
     ).to(device)
 
-    # per-class margin overrides
+    # per class margin overrides
     per_m = torch.full((num_classes,), base_m, device=device)
     for k, v in (mcfg.get("per_class_margin_overrides", {}) or {}).items():
         idx = int(k)
@@ -159,12 +172,11 @@ def main():
             per_m[idx] = float(v)
     model.cos_head.per_class_margin = per_m
 
-    # load full checkpoint (including cos_head.*)
-    clf_state = torch.load(best_ckpt, map_location=device)
+    # load full checkpoint into model (including cos_head.*)
     model.load_state_dict(clf_state, strict=True)
     model.eval()
 
-    # === DIFFUSION MODEL (for generated embeddings in t-SNE) ===
+    # === DIFFUSION MODEL ===
     diff_cfg = (cfg.get("training", {}).get("diffusion", {}) or {})
     T = int(diff_cfg.get("T", 1000))
     steps_infer = int(diff_cfg.get("steps_infer", 24))
@@ -202,7 +214,7 @@ def main():
         return np.concatenate(all_f, axis=0)
 
     def predict_batches(X):
-        """Use cosine-margin head for predictions, like in training evaluate()."""
+        """Use cosine margin head for predictions, same as in training evaluate."""
         preds = []
         bs = 256
         with torch.no_grad():
@@ -215,11 +227,15 @@ def main():
             return np.zeros((0,), dtype=np.int64)
         return np.concatenate(preds)
 
-    # === accuracy on test set ===
+ 
+ 
     print("\n=== Per fault accuracy on test set ===")
+
     y_pred = predict_batches(X_test)
 
     per_fault_acc = {}
+    acc_values = []   # store valid accuracies only
+
     n_classes = int(y_test.max()) + 1
     for c in range(n_classes):
         mask = (y_test == c)
@@ -227,13 +243,20 @@ def main():
             acc = float("nan")
         else:
             acc = (y_pred[mask] == c).mean()
+            acc_values.append(acc)
+
         per_fault_acc[c] = acc
         print(f"Fault {c}: {acc:.4f}")
 
-    # === t-SNE for faults 3, 9, 15 ===
+    # ---- print macro mean accuracy ----
+    if len(acc_values) > 0:
+        mean_acc = float(np.mean(acc_values))
+        print(f"\nAccuracy: {mean_acc:.4f}")
+    else:
+        print("\nMean accuracy could not be computed (no valid classes).")
+
+     # === t-SNE for faults 3, 9, 15 ===
     faults_to_plot = [3, 9, 15]
-    fig_dir = os.path.join(results_dir, "figures")
-    os.makedirs(fig_dir, exist_ok=True)
 
     # features for normals shared across plots
     idx_normal = sample_indices(y_test == normal_label, args.n_normal, rng)
