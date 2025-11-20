@@ -51,9 +51,6 @@ def _try_load_slices_from_config():
 
 
 def read_training_data(ff_path: str, ft_path: str):
-    """
-    Read .RData files using pyreadr. Paths are REQUIRED and validated.
-    """
     ff = Path(ff_path)
     ft = Path(ft_path)
     if not ff.exists():
@@ -61,10 +58,29 @@ def read_training_data(ff_path: str, ft_path: str):
     if not ft.exists():
         raise FileNotFoundError(f"Faulty RData not found: {ft}")
 
-    b1 = pyreadr.read_r(str(ff))['fault_free_training']
-    b2 = pyreadr.read_r(str(ft))['faulty_training']
-    train_ts = pd.concat([b1, b2]).sort_values(['faultNumber', 'simulationRun'])
-    return train_ts
+    ff_r = pyreadr.read_r(str(ff))
+    ft_r = pyreadr.read_r(str(ft))
+
+    # Auto detect key names based on filename
+    if "Testing" in ff.name:
+        key_free = "fault_free_testing"
+    else:
+        key_free = "fault_free_training"
+
+    if "Testing" in ft.name:
+        key_faulty = "faulty_testing"
+    else:
+        key_faulty = "faulty_training"
+
+    if key_free not in ff_r:
+        raise KeyError(f"Key {key_free} not in {ff}")
+    if key_faulty not in ft_r:
+        raise KeyError(f"Key {key_faulty} not in {ft}")
+
+    b1 = ff_r[key_free]
+    b2 = ft_r[key_faulty]
+
+    return pd.concat([b1, b2]).sort_values(["faultNumber", "simulationRun"])
 
 
 def sample_train_and_test(
@@ -92,41 +108,56 @@ def sample_train_and_test(
         (equivalent to fault_0.iloc[start:end])
     """
     frames_train, frames_test = [], []
-    fault_0 = train_ts[train_ts['faultNumber'] == 0]
+    fault_0 = train_ts[train_ts["faultNumber"] == 0]
 
     # ---------------- TRAIN ----------------
     if type_model == "supervised":
-        for i in sorted(train_ts['faultNumber'].unique()):
+        for i in sorted(train_ts["faultNumber"].unique()):
             if i == 0:
-                
                 frames_train.append(fault_0.iloc[normal_train_start:normal_train_end])
             else:
-                b = train_ts[train_ts['faultNumber'] == i]
+                b = train_ts[train_ts["faultNumber"] == i]
                 per = []
                 for x in train_runs:
-                    bx = b[b['simulationRun'] == x]
-                    per.append(bx.iloc[post_fault_start:500])
-                frames_train.append(pd.concat(per))
+                    bx = b[b["simulationRun"] == x]
+                    if not bx.empty:
+                        per.append(bx.iloc[post_fault_start:500])
+                # if we have no runs for this fault (e.g. empty train_runs), skip
+                if per:
+                    frames_train.append(pd.concat(per))
     else:
         frames_train.append(fault_0.iloc[normal_train_start:normal_train_end])
 
-    sampled_train = pd.concat(frames_train).sort_values(['faultNumber', 'simulationRun', 'sample'])
+    # if nothing was collected at all, create an empty frame with correct columns
+    if not frames_train:
+        frames_train.append(train_ts.iloc[0:0].copy())
+
+    sampled_train = pd.concat(frames_train).sort_values(
+        ["faultNumber", "simulationRun", "sample"]
+    )
 
     # ---------------- TEST ----------------
-    for i in sorted(train_ts['faultNumber'].unique()):
+    for i in sorted(train_ts["faultNumber"].unique()):
         if i == 0:
-          
             frames_test.append(fault_0.iloc[normal_test_start:normal_test_end])
         else:
-            b = train_ts[train_ts['faultNumber'] == i]
+            b = train_ts[train_ts["faultNumber"] == i]
             per = []
             for x in test_runs:
-                bx = b[b['simulationRun'] == x]
-                per.append(bx.iloc[post_fault_start:500])
-            frames_test.append(pd.concat(per))
+                bx = b[b["simulationRun"] == x]
+                if not bx.empty:
+                    per.append(bx.iloc[post_fault_start:500])
+            if per:
+                frames_test.append(pd.concat(per))
 
-    sampled_test = pd.concat(frames_test).sort_values(['faultNumber', 'simulationRun', 'sample'])
+    if not frames_test:
+        frames_test.append(train_ts.iloc[0:0].copy())
+
+    sampled_test = pd.concat(frames_test).sort_values(
+        ["faultNumber", "simulationRun", "sample"]
+    )
     return sampled_train.reset_index(drop=True), sampled_test.reset_index(drop=True)
+
 
 
 def scale_and_window(X_df, scaler, use_gpu=True, y_col='faultNumber',
@@ -165,8 +196,12 @@ def scale_and_window(X_df, scaler, use_gpu=True, y_col='faultNumber',
 
 
 def load_sampled_data(*,
-                      window_size=100, stride=5, type_model="supervised", use_gpu=True,
-                      ff_path: str, ft_path: str,
+                      window_size=100,
+                      stride=5,
+                      type_model="supervised",
+                      use_gpu=True,
+                      ff_path: str,
+                      ft_path: str,
                       post_fault_start=100,
                       train_runs=range(1, 25),
                       test_runs=range(26, 38),
@@ -175,39 +210,54 @@ def load_sampled_data(*,
                       normal_test_start: int = None,
                       normal_test_end: int = None):
     """
-    End-to-end loading + scaling + windowing.
+    End to end loading + scaling + windowing.
     """
-    # Fill normal slices from config.yaml if caller didn't pass them
+    # Fill normal slices from config.yaml if caller did not pass them
     cfg_slices = _try_load_slices_from_config()
     ntr_s = normal_train_start if normal_train_start is not None else cfg_slices.get("normal_train_start", 0)
     ntr_e = normal_train_end   if normal_train_end   is not None else cfg_slices.get("normal_train_end",   42000)
     nte_s = normal_test_start  if normal_test_start  is not None else cfg_slices.get("normal_test_start",  42000)
     nte_e = normal_test_end    if normal_test_end    is not None else cfg_slices.get("normal_test_end",    44000)
 
+    # this now uses the auto detecting read_training_data you pasted
     ts = read_training_data(ff_path, ft_path)
+
     tr, te = sample_train_and_test(
-        ts, type_model,
+        ts,
+        type_model,
         post_fault_start=post_fault_start,
         train_runs=train_runs,
         test_runs=test_runs,
         normal_train_start=ntr_s,
         normal_train_end=ntr_e,
         normal_test_start=nte_s,
-        normal_test_end=nte_e
+        normal_test_end=nte_e,
     )
 
-    fault_free = tr[tr['faultNumber'] == 0].iloc[:, 3:].values
+    fault_free = tr[tr["faultNumber"] == 0].iloc[:, 3:].values
     if use_gpu and GPU_AVAILABLE:
-        scaler = cuStandardScaler(); scaler.fit(cp.asarray(fault_free))
+        scaler = cuStandardScaler()
+        scaler.fit(cp.asarray(fault_free))
     else:
-        scaler = skStandardScaler(); scaler.fit(fault_free)
+        scaler = skStandardScaler()
+        scaler.fit(fault_free)
 
     X_train, y_train, meta_tr = scale_and_window(
-        tr, scaler, use_gpu=use_gpu, y_col='faultNumber',
-        window_size=window_size, stride=stride, return_meta=True
+        tr,
+        scaler,
+        use_gpu=use_gpu,
+        y_col="faultNumber",
+        window_size=window_size,
+        stride=stride,
+        return_meta=True,
     )
     X_test, y_test, meta_te = scale_and_window(
-        te, scaler, use_gpu=use_gpu, y_col='faultNumber',
-        window_size=window_size, stride=stride, return_meta=True
+        te,
+        scaler,
+        use_gpu=use_gpu,
+        y_col="faultNumber",
+        window_size=window_size,
+        stride=stride,
+        return_meta=True,
     )
     return (X_train, y_train, meta_tr), (X_test, y_test, meta_te)

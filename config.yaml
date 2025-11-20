@@ -1,19 +1,19 @@
 dataset:
-  ff_path: "/root/TEP_FaultFree_Training.RData"
-  ft_path: "/root/TEP_Faulty_Training.RData"
+  ff_path: "/workspace/TEP_FaultFree_Training.RData"
+  ft_path: "/workspace/TEP_Faulty_Training.RData"
 
 data_windowing:
   window_size: 100
   stride: 5
   normal_train_start: 0
-  normal_train_end: 240000
-  normal_test_start: 244000
+  normal_train_end: 250000
+  normal_test_start: 248000
   normal_test_end: 250000
-  post_fault_start: 100         
+  post_fault_start: 160         
   train_runs_start: 1
-  train_runs_end: 80
-  test_runs_start: 100
-  test_runs_end: 1
+  train_runs_end: 200
+  test_runs_start: 200
+  test_runs_end: 220
 
 training:
   epochs: 100
