@@ -8,7 +8,6 @@ from sklearn.metrics import (
 )
 from sklearn.manifold import TSNE
 
-
 @torch.no_grad()
 def get_preds_and_logits(model, loader, device):
     """Return y_true, y_pred, logits (CPU)."""

@@ -69,10 +69,32 @@ def parse_args():
     return p.parse_args()
 
 def set_seed(seed: int):
+    import os
     import random
-    random.seed(seed); np.random.seed(seed)
-    torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
+    import numpy as np
+    import torch
 
+    # Python
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+    # NumPy
+    np.random.seed(seed)
+
+    # Torch
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # Deterministic CuDNN
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+def seed_worker(worker_id):
+    import numpy as np
+    import torch
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
 
 # ------------------------
 # Plain CE training (baseline)
@@ -173,9 +195,14 @@ def main():
 
         N, T, D = X_tr.shape
         X2d = X_tr.reshape(N, T * D).astype(np.float32)
-        sm = SMOTE(...)
+        sm = SMOTE(
+            sampling_strategy=sampling_strategy,
+            k_neighbors=k_neighbors,
+            random_state=seed
+        )
         X_res, y_res = sm.fit_resample(X2d, y_tr)
         X_tr, y_tr = X_res.reshape(-1, T, D), y_res
+
 
 
         use_weighted_sampler = False 
@@ -186,20 +213,40 @@ def main():
 
     train_ds = PlainTSDataset(X_tr, y_tr)
 
+
+    # generator for reproducible DataLoader shuffling and sampling
+    g = torch.Generator()
+    g.manual_seed(seed)
+
     if use_weighted_sampler:
         sampler, class_counts = make_sampler(y_tr)
         train_loader = torch.utils.data.DataLoader(
-            train_ds, batch_size=train_bs, sampler=sampler, drop_last=True,
-            num_workers=num_workers, pin_memory=use_pin_memory,
-            persistent_workers=True, prefetch_factor=2
+            train_ds,
+            batch_size=train_bs,
+            sampler=sampler,
+            drop_last=True,
+            num_workers=num_workers,
+            pin_memory=use_pin_memory,
+            persistent_workers=True,
+            prefetch_factor=2,
+            worker_init_fn=seed_worker,
+            generator=g,
         )
     else:
         class_counts = np.bincount(y_tr.astype(int))
         train_loader = torch.utils.data.DataLoader(
-            train_ds, batch_size=train_bs, shuffle=True, drop_last=True,
-            num_workers=num_workers, pin_memory=use_pin_memory,
-            persistent_workers=True, prefetch_factor=2
+            train_ds,
+            batch_size=train_bs,
+            shuffle=True,
+            drop_last=True,
+            num_workers=num_workers,
+            pin_memory=use_pin_memory,
+            persistent_workers=True,
+            prefetch_factor=2,
+            worker_init_fn=seed_worker,
+            generator=g,
         )
+
 
     val_loader = torch.utils.data.DataLoader(
         PlainTSDataset(X_val, y_val), batch_size=val_bs, shuffle=False,
@@ -431,10 +478,17 @@ def main():
 
     try:
         y_true, y_pred, logits = get_preds_and_logits(model, test_loader, device)
-          
         num_classes = int(np.max(y_true)) + 1
-        
-       
+
+        # compute per class accuracy
+        per_class_acc = {}
+        for c in range(num_classes):
+            mask = (y_true == c)
+            if mask.sum() == 0:
+                per_class_acc[c] = np.nan
+            else:
+                per_class_acc[c] = float((y_pred[mask] == y_true[mask]).mean())
+
         with open(os.path.join(results_dir, "per_class_acc.json"), "w") as f:
             json.dump({str(k): float(v) for k, v in per_class_acc.items()}, f, indent=2)
 
@@ -443,15 +497,15 @@ def main():
             for c in range(num_classes):
                 n_c = int((y_true == c).sum())
                 v = per_class_acc[c]
-                f.write(f"{c},{'' if not np.isfinite(v) else f'{100*v:.4f}'}," \
-                        f"{n_c}\n")
+                acc_str = "" if not np.isfinite(v) else f"{100 * v:.4f}"
+                f.write(f"{c},{acc_str},{n_c}\n")
 
-       
         np.save(os.path.join(results_dir, "test_y.npy"), y_true)
         np.save(os.path.join(results_dir, "test_pred_reg.npy"), y_pred)
         np.save(os.path.join(results_dir, "test_logits_reg.npy"), logits)
     except Exception:
         pass
+
 
 
     try:
