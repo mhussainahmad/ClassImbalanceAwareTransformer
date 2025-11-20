@@ -25,19 +25,19 @@ training:
   seed: 42
   diffusion:
     enabled: true
-    start_epoch: 13
-    synth_ratio: 0.2      
+    start_epoch: 8
+    synth_ratio: 0.1      
     steps_infer: 70
-    epochs: 20      
-    width: 512
-    depth: 3
-    margin_gate_delta: 0.05
+    epochs: 5      
+    width: 256
+    depth: 2
+    margin_gate_delta: 0.1
     selected_faults: [3,9,15]
     export_per_class: 1000
     export_steps_infer: 150
 
 model:
-  s: 16.0
+  s: 12.0
   m: 0.15
   margin_type: "arc"
   per_class_margin_overrides:

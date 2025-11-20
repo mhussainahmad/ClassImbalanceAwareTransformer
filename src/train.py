@@ -313,7 +313,7 @@ def main():
         opt = torch.optim.AdamW([
             {"params": [p for n, p in model.named_parameters() if not n.startswith("cos_head.")],
             "lr": 3e-4, "weight_decay": 1e-4},
-            {"params": [model.cos_head.W], "lr": 3e-4, "weight_decay": 5e-5},
+            {"params": [model.cos_head.W], "lr": 3e-4, "weight_decay": 1e-4},
         ], lr=3e-4, weight_decay=0.0)
     
         # === Diffusion config ===

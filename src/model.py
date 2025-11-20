@@ -25,26 +25,31 @@ class SelfGating(nn.Module):
 class SelfGatedHierarchicalTransformerEncoder(nn.Module):
     def __init__(self, input_dim, d_model=64, nhead=4,
                  num_layers_low=3, num_layers_high=3,
-                 dim_feedforward=128, dropout=0.001,
+                 dim_feedforward=128, dropout=0.1,   # was 0.001
                  pool_output_size=10, num_classes=21, proj_dim=128):
         super().__init__()
-        self.input_proj = nn.Linear(input_dim, d_model)  # (Eq. 1)
+        self.input_proj = nn.Linear(input_dim, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
 
         enc_low = nn.TransformerEncoderLayer(
             d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=False)
-        self.encoder_low = nn.TransformerEncoder(enc_low, num_layers=num_layers_low)  # (Eq. 4–6)
+        self.encoder_low = nn.TransformerEncoder(enc_low, num_layers=num_layers_low)
 
-        self.pool = nn.AdaptiveAvgPool1d(pool_output_size)  # (Eq. 7)
-        self.self_gate = SelfGating(d_model)                # (Eq. 8–9)
+        self.pool = nn.AdaptiveAvgPool1d(pool_output_size)
+        self.self_gate = SelfGating(d_model)
 
         enc_high = nn.TransformerEncoderLayer(
             d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=False)
-        self.encoder_high = nn.TransformerEncoder(enc_high, num_layers=num_layers_high)  # (Eq. 10)
-
+        self.encoder_high = nn.TransformerEncoder(enc_high, num_layers=num_layers_high)
         self.classifier = nn.Sequential(
-            nn.Linear(d_model, 128), nn.ReLU(), nn.Dropout(0.2), nn.Linear(128, num_classes)
-        )  # (train loop will apply LA-CE per Eq. 15–16)
+            nn.Linear(d_model, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(128, num_classes),
+        ) # (train loop will apply LA-CE per Eq. 15–16)
         self.proj_head = nn.Sequential(
             nn.Linear(d_model, d_model), nn.ReLU(inplace=True), nn.Linear(d_model, proj_dim)
         )  # (used for MAAC per Eq. 17–19)
