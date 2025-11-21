@@ -26,7 +26,7 @@ training:
   diffusion:
     enabled: true
     start_epoch: 8
-    synth_ratio: 0.1      
+    synth_ratio: 0.2    
     steps_infer: 70
     epochs: 5      
     width: 128
@@ -41,11 +41,11 @@ model:
   m: 0.15
   margin_type: "arc"
   per_class_margin_overrides:
-    "0": 0.1
-    "15": 0.1
+    "0": 0.15
+    "15": 0.15
   center_momentum: 0.95
   center_sep_K: 3
   center_sep_margin: 0.1
   center_pull_weights:
-    "0": 1.5
-    "15": 1.5
+    "0": 2.5
+    "15": 2.5

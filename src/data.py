@@ -16,9 +16,6 @@ except Exception:
 from sklearn.preprocessing import StandardScaler as skStandardScaler
 
 
-# -------------------------
-# helpers
-# -------------------------
 def _try_load_slices_from_config():
     """
     Try to load normal (fault 0) train/test slice bounds from config.yaml.
@@ -122,13 +119,13 @@ def sample_train_and_test(
                     bx = b[b["simulationRun"] == x]
                     if not bx.empty:
                         per.append(bx.iloc[post_fault_start:500])
-                # if we have no runs for this fault (e.g. empty train_runs), skip
+             
                 if per:
                     frames_train.append(pd.concat(per))
     else:
         frames_train.append(fault_0.iloc[normal_train_start:normal_train_end])
 
-    # if nothing was collected at all, create an empty frame with correct columns
+
     if not frames_train:
         frames_train.append(train_ts.iloc[0:0].copy())
 
@@ -212,14 +209,13 @@ def load_sampled_data(*,
     """
     End to end loading + scaling + windowing.
     """
-    # Fill normal slices from config.yaml if caller did not pass them
     cfg_slices = _try_load_slices_from_config()
     ntr_s = normal_train_start if normal_train_start is not None else cfg_slices.get("normal_train_start", 0)
     ntr_e = normal_train_end   if normal_train_end   is not None else cfg_slices.get("normal_train_end",   42000)
     nte_s = normal_test_start  if normal_test_start  is not None else cfg_slices.get("normal_test_start",  42000)
     nte_e = normal_test_end    if normal_test_end    is not None else cfg_slices.get("normal_test_end",    44000)
 
-    # this now uses the auto detecting read_training_data you pasted
+
     ts = read_training_data(ff_path, ft_path)
 
     tr, te = sample_train_and_test(
