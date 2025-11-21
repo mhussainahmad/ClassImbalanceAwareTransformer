@@ -146,7 +146,7 @@ def sample_train_and_test(
             for x in test_runs:
                 bx = b[b["simulationRun"] == x]
                 if not bx.empty:
-                    per.append(bx.iloc[post_fault_start:500])
+                    per.append(bx.iloc[post_fault_start:600])
             if per:
                 frames_test.append(pd.concat(per))
 

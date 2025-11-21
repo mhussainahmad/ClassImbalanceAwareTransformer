@@ -262,20 +262,11 @@ def main():
 
     # ---- Model
     model = SelfGatedHierarchicalTransformerEncoder(
-            input_dim=X_train.shape[2],
-            d_model=128,
-            nhead=4,
-            num_layers_low=2,
-            num_layers_high=2,
-            dim_feedforward=128,
-            dropout=0.05,
-            pool_output_size=10,
-            num_classes=int(y_train.max()) + 1,
-        ).to(device)
-
+        input_dim=X_train.shape[2], num_classes=int(y_train.max())+1
+    ).to(device)
 
     if args.baseline:
-        opt = torch.optim.Adam(model.parameters(), lr=1e-4)
+        opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
         diffusion_model = None
         use_diffusion = False
     else:
