@@ -74,14 +74,17 @@ def main():
     with open(cfg_path, "r") as f:
         cfg = yaml.safe_load(f)
 
-    # Hardcoded checkpoints in repo root
+    diff_cfg = (cfg.get("training", {}).get("diffusion", {}) or {})
+    use_diffusion = bool(diff_cfg.get("enabled", True))
+
     best_ckpt = "/workspace/ClassImbalanceAwareTransformer/best_state_dict.pt"
     diff_ckpt = "/workspace/ClassImbalanceAwareTransformer/diffusion_state_dict.pt"
 
     if not os.path.exists(best_ckpt):
         raise FileNotFoundError(f"best_state_dict.pt not found at: {best_ckpt}")
-    if not os.path.exists(diff_ckpt):
+    if use_diffusion and not os.path.exists(diff_ckpt):
         raise FileNotFoundError(f"diffusion_state_dict.pt not found at: {diff_ckpt}")
+
 
     # Figures directory
     fig_dir = "/workspace/ClassImbalanceAwareTransformer/figures"
@@ -99,14 +102,13 @@ def main():
     post_fault_start = cfg["data_windowing"]["post_fault_start"]
 
     # Hardcoded test selection for fault 0
-    normal_test_start = 1
-    normal_test_end = 50000
+    normal_test_start = 10000
+    normal_test_end = 20000
     train_runs_end = 10
-    post_fault_start = 160
-    test_runs_start: 1
-    test_runs_end: 20
+    test_runs_start = 1
+    test_runs_end = 20
     # Hardcoded faulty test runs
-    test_runs = range(1, 40)
+    test_runs = range(1, 20)
 
     # No training runs needed for inference, but load_sampled_data
     # still returns a "train" part that we only use to get input_dim
@@ -132,12 +134,10 @@ def main():
     # === Load checkpoint first, to derive num_classes from it ===
     clf_state = torch.load(best_ckpt, map_location=device)
 
-    # classifier.3.weight has shape [num_classes, hidden_dim]
-    if "classifier.3.weight" not in clf_state:
-        raise KeyError("classifier.3.weight not found in checkpoint; cannot infer num_classes")
-
-    num_classes = clf_state["classifier.3.weight"].shape[0]
+    # get num_classes from labels (or from config if you prefer)
+    num_classes = int(y_test.max()) + 1
     input_dim = X_train.shape[2]
+
 
     # === MODEL + COSINE HEAD (same as training) ===
     model = SelfGatedHierarchicalTransformerEncoder(
@@ -176,24 +176,26 @@ def main():
     model.load_state_dict(clf_state, strict=True)
     model.eval()
 
-    # === DIFFUSION MODEL ===
-    diff_cfg = (cfg.get("training", {}).get("diffusion", {}) or {})
+    
     T = int(diff_cfg.get("T", 1000))
     steps_infer = int(diff_cfg.get("steps_infer", 24))
     width = int(diff_cfg.get("width", 512))
     depth = int(diff_cfg.get("depth", 3))
 
-    ddm = DecisionSpaceDiffusion(
-        feat_dim,
-        num_classes,
-        T=T,
-        num_steps_infer=steps_infer,
-        width=width,
-        depth=depth,
-    ).to(device)
-    ddm_state = torch.load(diff_ckpt, map_location=device)
-    ddm.load_state_dict(ddm_state)
-    ddm.eval()
+    ddm = None
+    if use_diffusion:
+        ddm = DecisionSpaceDiffusion(
+            feat_dim,
+            num_classes,
+            T=T,
+            num_steps_infer=steps_infer,
+            width=width,
+            depth=depth,
+        ).to(device)
+        ddm_state = torch.load(diff_ckpt, map_location=device)
+        ddm.load_state_dict(ddm_state)
+        ddm.eval()
+
 
     rng = np.random.default_rng(args.seed)
     normal_label = 0
@@ -227,8 +229,8 @@ def main():
             return np.zeros((0,), dtype=np.int64)
         return np.concatenate(preds)
 
- 
- 
+
+
     print("\n=== Per fault accuracy on test set ===")
 
     y_pred = predict_batches(X_test)
@@ -255,7 +257,7 @@ def main():
     else:
         print("\nMean accuracy could not be computed (no valid classes).")
 
-     # === t-SNE for faults 3, 9, 15 ===
+    # === t-SNE for faults 3, 9, 15 ===
     faults_to_plot = [3, 9, 15]
 
     # features for normals shared across plots
@@ -274,10 +276,12 @@ def main():
         feats_fault = extract_feats(X_fault)
 
         # generate synthetic embeddings for this fault
-        with torch.no_grad():
-            y_gen = torch.full((args.n_gen,), fault_id, dtype=torch.long, device=device)
-            Z_gen = ddm.ddim_sample(y=y_gen, n=args.n_gen, steps=steps_infer)
-            feats_gen = Z_gen.cpu().numpy()
+        feats_gen = np.zeros((0, feat_dim), dtype=np.float32)
+        if ddm is not None:
+            with torch.no_grad():
+                y_gen = torch.full((args.n_gen,), fault_id, dtype=torch.long, device=device)
+                Z_gen = ddm.ddim_sample(y=y_gen, n=args.n_gen, steps=steps_infer)
+                feats_gen = Z_gen.cpu().numpy()
 
         X_all = np.vstack([feats_norm, feats_fault, feats_gen])
 

@@ -29,7 +29,7 @@ training:
     synth_ratio: 0.1      
     steps_infer: 70
     epochs: 5      
-    width: 256
+    width: 128
     depth: 2
     margin_gate_delta: 0.1
     selected_faults: [3,9,15]
@@ -41,11 +41,11 @@ model:
   m: 0.15
   margin_type: "arc"
   per_class_margin_overrides:
-    "0": 0.28
-    "15": 0.28
+    "0": 0.1
+    "15": 0.1
   center_momentum: 0.95
   center_sep_K: 3
-  center_sep_margin: 0.28
+  center_sep_margin: 0.1
   center_pull_weights:
-    "0": 2.5
-    "15": 3.0
+    "0": 1.5
+    "15": 1.5
