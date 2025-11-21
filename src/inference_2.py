@@ -76,7 +76,8 @@ def main():
         cfg = yaml.safe_load(f)
 
     diff_cfg = (cfg.get("training", {}).get("diffusion", {}) or {})
-    use_diffusion = bool(diff_cfg.get("enabled", True))
+    #use_diffusion = bool(diff_cfg.get("enabled", True))
+    use_diffusion = False
 
     best_ckpt = "/workspace/ClassImbalanceAwareTransformer/best_state_dict.pt"
     diff_ckpt = "/workspace/ClassImbalanceAwareTransformer/diffusion_state_dict.pt"
@@ -126,8 +127,16 @@ def main():
 
     model = SelfGatedHierarchicalTransformerEncoder(
         input_dim=input_dim,
+        d_model=128,
+        nhead=4,
+        num_layers_low=2,
+        num_layers_high=2,
+        dim_feedforward=128,
+        dropout=0.05,
+        pool_output_size=10,
         num_classes=num_classes,
     ).to(device)
+
 
     with torch.no_grad():
         x0 = torch.from_numpy(X_train[:1]).float().to(device)
