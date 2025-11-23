@@ -322,40 +322,58 @@ def plot_tsne_triplet(
     feats, y, gen, fault_id,
     save_path="results/embed_fault_triplet.png",
     normalize="both",
-    max_per_class=600,
+    max_per_class=600,   # used as max faults
+    ratio=5,
     seed=0,
     perplexity=35,
     pca_dim=50,
     align_gen=True,
     shrink=0.55,
     clip_q=0.94,
-    remove_frac_norm=0.20,   
-    remove_frac_gen=0.20,   
+    remove_frac_norm=0.20,
+    remove_frac_gen=0.20,
 ):
-    import os
-    import numpy as np
+
     from sklearn.preprocessing import StandardScaler
     from sklearn.decomposition import PCA
     from sklearn.manifold import TSNE
     import matplotlib.pyplot as plt
-
     rng = np.random.default_rng(seed)
 
     idx_norm = np.where(y == 0)[0]
     idx_fk   = np.where(y == int(fault_id))[0]
-    if len(idx_norm) == 0 or len(idx_fk) == 0 or gen is None or len(gen) == 0:
+
+    Gk = np.asarray(gen) if gen is not None else np.empty((0, feats.shape[1]))
+    if len(idx_norm) == 0 or len(idx_fk) == 0 or Gk.shape[0] == 0:
         raise ValueError("Missing data for plot_tsne_triplet (normal/fault/gen).")
 
-    if len(idx_norm) > max_per_class:
-        idx_norm = rng.choice(idx_norm, size=max_per_class, replace=False)
-    if len(idx_fk) > max_per_class:
-        idx_fk = rng.choice(idx_fk, size=max_per_class, replace=False)
+    # ratio control: normal = ratio * F, generated = (ratio-1) * F
+    ratio = max(2, int(ratio))
+
+    max_fault_avail = min(len(idx_fk), max_per_class)
+    max_norm_avail = len(idx_norm)
+    max_gen_avail = Gk.shape[0]
+
+    # constraints so that we can satisfy the counts exactly
+    F_max_by_norm = max_norm_avail // ratio
+    F_max_by_gen = max_gen_avail // (ratio - 1)
+
+    F_use = min(max_fault_avail, F_max_by_norm, F_max_by_gen)
+    if F_use <= 0:
+        raise ValueError("Not enough samples to satisfy requested ratio in plot_tsne_triplet.")
+
+    # sample indices
+    idx_fk = rng.choice(idx_fk, size=F_use, replace=False)
+    N_norm = ratio * F_use
+    N_gen = (ratio - 1) * F_use
+
+    idx_norm = rng.choice(idx_norm, size=N_norm, replace=False)
+    if Gk.shape[0] > N_gen:
+        Gk = Gk[rng.choice(np.arange(Gk.shape[0]), size=N_gen, replace=False)]
+
     Xn = feats[idx_norm]
     Xk = feats[idx_fk]
-    Gk = np.asarray(gen)
-
-    if Gk.shape[0] > max_per_class:
-        Gk = Gk[rng.choice(np.arange(Gk.shape[0]), size=max_per_class, replace=False)]
+    # Gk already defined
 
 
     def l2n(a, eps=1e-12):
