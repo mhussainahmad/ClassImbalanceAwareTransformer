@@ -579,3 +579,73 @@ def plot_tsne_normal_fault6_generated(
     ax.set_title("t-SNE: Normal vs Fault vs Generated")
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     plt.tight_layout(); plt.savefig(save_path, dpi=300); plt.close(fig)
+
+def plot_confusion_matrix_heatmap(
+    y_true,
+    y_pred,
+    num_classes,
+    save_path="results/confusion_matrix_test.png",
+):
+    """
+    Normalized confusion matrix heatmap that prints a value in every block.
+    Values are shown with 2 decimals, including zeros (0.00).
+    """
+
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import confusion_matrix
+
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+
+    # Compute confusion matrix
+    cm = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
+
+    # Row normalize
+    row_sums = cm.sum(axis=1, keepdims=True)
+    cm_norm = cm.astype(float) / np.clip(row_sums, 1e-12, None)
+
+    fig, ax = plt.subplots(figsize=(12, 9))
+
+    # Heatmap
+    im = ax.imshow(
+        cm_norm,
+        interpolation="nearest",
+        cmap="Greens",
+        vmin=0.0,
+        vmax=1.0,
+    )
+
+    # Axis labels
+    ax.set_xticks(np.arange(num_classes))
+    ax.set_yticks(np.arange(num_classes))
+    ax.set_xlabel("Predicted Class")
+    ax.set_ylabel("Actual Class")
+    ax.set_title("Normalized Confusion Matrix")
+
+    ax.tick_params(axis="both", which="major", labelsize=7)
+
+    # Color bar
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("Probability")
+
+    # Annotate each cell with value (2 decimals)
+    fmt = ".2f"
+    for i in range(num_classes):
+        for j in range(num_classes):
+            v = cm_norm[i, j]
+            # text color contrast
+            text_color = "white" if v > 0.5 else "black"
+            ax.text(
+                j,
+                i,
+                format(v, fmt),
+                ha="center",
+                va="center",
+                color=text_color,
+                fontsize=6,
+            )
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close(fig)

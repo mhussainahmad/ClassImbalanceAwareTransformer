@@ -6,7 +6,7 @@ data_windowing:
   window_size: 100
   stride: 5
   normal_train_start: 0
-  normal_train_end: 250000
+  normal_train_end: 248000
   normal_test_start: 248000
   normal_test_end: 250000
   post_fault_start: 160         
@@ -42,10 +42,10 @@ model:
   margin_type: "arc"
   per_class_margin_overrides:
     "0": 0.15
-    "15": 0.15
+    "15": 0.25
   center_momentum: 0.95
   center_sep_K: 3
   center_sep_margin: 0.1
   center_pull_weights:
-    "0": 2.5
+    "0": 1.5
     "15": 2.5

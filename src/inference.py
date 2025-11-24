@@ -7,16 +7,20 @@ import torch
 import torch.nn.functional as F_torch
 import yaml
 
+from sklearn.metrics import confusion_matrix
+import matplotlib.pyplot as plt
+
 from .data import load_sampled_data
 from .model import SelfGatedHierarchicalTransformerEncoder, CosineMarginClassifier
 from .diffusion import DecisionSpaceDiffusion
 
-# plotting helpers (you already have these in src/plots.py)
 from src.plots import (
     plot_embedding,
     plot_inter_intra_distributions,
     plot_tsne_triplet,
+    plot_confusion_matrix_heatmap,
 )
+
 
 
 def set_seed(seed: int):
@@ -171,6 +175,7 @@ def predict_batches(model, X, device):
     return np.concatenate(preds)
 
 
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -185,8 +190,19 @@ def main():
     diff_cfg = (training_cfg.get("diffusion", {}) or {})
     use_diffusion = bool(diff_cfg.get("enabled", True))
 
-    best_ckpt = "/workspace/ClassImbalanceAwareTransformer/best_state_dict.pt"
-    diff_ckpt = "/workspace/ClassImbalanceAwareTransformer/diffusion_state_dict.pt"
+    ratio = int(args.ratio)
+
+    base_dir = "/workspace/ClassImbalanceAwareTransformer"
+
+    best_ckpt = f"{base_dir}/best_state_dict_{ratio}.pt"
+    diff_ckpt = f"{base_dir}/diffusion_state_dict_{ratio}.pt"
+
+    if not os.path.exists(best_ckpt):
+        raise FileNotFoundError(f"Missing model file: {best_ckpt}")
+
+    if use_diffusion and not os.path.exists(diff_ckpt):
+        raise FileNotFoundError(f"Missing diffusion file: {diff_ckpt}")
+
 
     if not os.path.exists(best_ckpt):
         raise FileNotFoundError(f"best_state_dict.pt not found at: {best_ckpt}")
@@ -199,9 +215,7 @@ def main():
     fig_dir = "/workspace/ClassImbalanceAwareTransformer/figures"
     os.makedirs(fig_dir, exist_ok=True)
 
-    # ---------------------------------------------------------
-    # 1. Accuracy on TESTING RData files
-    # ---------------------------------------------------------
+
     print("\n=== Loading Testing data for accuracy ===")
     ff_path_test = "/workspace/TEP_FaultFree_Testing.RData"
     ft_path_test = "/workspace/TEP_Faulty_Testing.RData"
@@ -227,9 +241,6 @@ def main():
         normal_test_start=normal_test_start,
         normal_test_end=normal_test_end,
     )
-
-    print("Test X_test shape:", X_test.shape)
-    print("Test y_test shape:", y_test.shape)
 
     clf_state = torch.load(best_ckpt, map_location=device)
     input_dim = X_test.shape[2]
@@ -261,9 +272,17 @@ def main():
     else:
         print("\nMean accuracy could not be computed (no valid classes).")
 
-    # ---------------------------------------------------------
-    # 2. Load TRAINING RData for all plots
-    # ---------------------------------------------------------
+    
+    cm_path = os.path.join(fig_dir, "confusion_matrix_test.png")
+    plot_confusion_matrix_heatmap(
+        y_test,
+        y_pred,
+        num_classes=num_classes,
+        save_path=cm_path,
+    )
+    print(f"Saved confusion matrix to {cm_path}")
+
+
     print("\n=== Loading Training data for plots ===")
     ff_path_train = "/workspace/TEP_FaultFree_Training.RData"
     ft_path_train = "/workspace/TEP_Faulty_Training.RData"
@@ -286,19 +305,13 @@ def main():
         train_runs=train_runs,
         test_runs=test_runs_for_plots,
     )
-
-    print("Train-plot X_train shape:", X_train_vis.shape)
-    print("Train-plot X_val shape:", X_val_vis.shape)
-
     X_all_vis = np.concatenate([X_train_vis, X_val_vis], axis=0)
     y_all_vis = np.concatenate([y_train_vis, y_val_vis], axis=0)
 
     feats_all = extract_feats(model, X_all_vis, feat_dim, device)
 
-    # ---------------------------------------------------------
-    # 3. Global t-SNE embedding of all classes (Training data)
-    # ---------------------------------------------------------
-    print("\n=== Global t-SNE of all classes (Training data) ===")
+
+    print("\n=== Global t-SNE of all classes ===")
     tsne_all_path = os.path.join(fig_dir, "tsne_all_classes.png")
     plot_embedding(
         feats_all,
@@ -310,9 +323,7 @@ def main():
     )
     print(f"Saved global t-SNE to {tsne_all_path}")
 
-    # ---------------------------------------------------------
-    # 4. Intra vs inter class distance plot (centers from training data)
-    # ---------------------------------------------------------
+ 
     print("\n=== Intra vs Inter class distance plot ===")
     C = num_classes
     centers = np.zeros((C, feat_dim), dtype=np.float32)
@@ -326,9 +337,7 @@ def main():
     )
     print(f"Saved intra vs inter distance plot to {inter_intra_path}")
 
-    # ---------------------------------------------------------
-    # 5. Load diffusion model for generated embeddings (for triplet t-SNE)
-    # ---------------------------------------------------------
+
     ddm = None
     if use_diffusion:
         print("\n=== Loading diffusion model for generated embeddings ===")
@@ -351,13 +360,10 @@ def main():
     else:
         print("\nDiffusion disabled in config, triplet plots will not use generated samples.")
 
-    # ---------------------------------------------------------
-    # 6. Triplet t-SNE plots (normal vs fault vs generated) for 3, 9, 15
-    #    using Training data and enforcing counts with ratio
-    # ---------------------------------------------------------
+   
     faults_to_plot = [3, 9, 15]
     for fid in faults_to_plot:
-        print(f"\n=== Triplet t-SNE for fault {fid} (Training data) ===")
+        print(f"\n=== Triplet t-SNE for fault {fid} ===")
         gen_feats = None
         if ddm is not None:
             with torch.no_grad():
@@ -373,7 +379,7 @@ def main():
 
         save_path = os.path.join(fig_dir, f"tsne_fault_{fid}.png")
         try:
-            # ratio is enforced inside plot_tsne_triplet (see change below)
+
             plot_tsne_triplet(
                 feats_all,
                 y_all_vis,
@@ -387,7 +393,6 @@ def main():
         except ValueError as e:
             print(f"Skipping fault {fid} triplet plot: {e}")
 
-    print("\nDone.")
 
 
 if __name__ == "__main__":
