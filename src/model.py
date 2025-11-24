@@ -25,13 +25,15 @@ class SelfGating(nn.Module):
 class SelfGatedHierarchicalTransformerEncoder(nn.Module):
     def __init__(self, input_dim, d_model=64, nhead=4,
                  num_layers_low=3, num_layers_high=3,
-                 dim_feedforward=128, dropout=0.05,   # closer to old 0.05 / 0.001
+                 dim_feedforward=128, dropout=0.05,
                  pool_output_size=10, num_classes=21, proj_dim=128):
         super().__init__()
+        self.input_dim = input_dim
+        self.d_model = d_model
+
         self.input_proj = nn.Linear(input_dim, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
 
-        # match old: norm_first=True, milder dropout
         enc_low = nn.TransformerEncoderLayer(
             d_model, nhead, dim_feedforward, dropout,
             batch_first=True, norm_first=True
@@ -39,7 +41,7 @@ class SelfGatedHierarchicalTransformerEncoder(nn.Module):
         self.encoder_low = nn.TransformerEncoder(enc_low, num_layers=num_layers_low)
 
         self.pool = nn.AdaptiveAvgPool1d(pool_output_size)
-        self.self_gate = SelfGating(d_model)
+        self.self_gate = SelfGating(d_model)      # <-- gates come from here
 
         enc_high = nn.TransformerEncoderLayer(
             d_model, nhead, dim_feedforward, dropout,
@@ -47,7 +49,6 @@ class SelfGatedHierarchicalTransformerEncoder(nn.Module):
         )
         self.encoder_high = nn.TransformerEncoder(enc_high, num_layers=num_layers_high)
 
-        # match old classifier: single hidden layer + small dropout
         self.classifier = nn.Sequential(
             nn.Linear(d_model, 128),
             nn.ReLU(),
@@ -55,29 +56,59 @@ class SelfGatedHierarchicalTransformerEncoder(nn.Module):
             nn.Linear(128, num_classes),
         )
 
-        # keep projection head for MAAC, but it does not affect baseline forward
         self.proj_head = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.ReLU(inplace=True),
             nn.Linear(d_model, proj_dim),
         )
 
-    def forward_features(self, x):
+    def forward_features_with_gates(self, x):
+        """
+        same as forward_features() BUT also outputs gates per segment
+        and W_proj needed for interpretability.
+        """
+        W_proj = self.input_proj.weight   # (d_model, F)
+
         x = self.input_proj(x)
         x = self.pos_encoder(x)
         low = self.encoder_low(x)
+
         pooled = self.pool(low.transpose(1, 2)).transpose(1, 2)
-        gated = self.self_gate(pooled)
+
+        # -------- gate extraction --------
+        gate_weights = self.self_gate.gate(pooled)   # (B, S, d_model) BEFORE multiplying
+        gated = pooled * gate_weights                # (Eq.9)
+
         high = self.encoder_high(gated)
         feat = high.mean(dim=1)
+
+        extras = {
+            "gates": gate_weights,     # (B, S, d_model)
+            "W_proj": W_proj           # (d_model, F)
+        }
+
+        return feat, extras
+
+    def forward_features(self, x):
+        feat, _ = self.forward_features_with_gates(x)
         return feat
 
-    def forward(self, x):
-        feat = self.forward_features(x)
-        return self.classifier(feat)
+    def forward(self, x, return_gates=False):
+        """
+        If return_gates=False: usual classifier forward
+        If return_gates=True: return (logits, extras)
+        """
+        if return_gates:
+            feat, extras = self.forward_features_with_gates(x)
+            logits = self.classifier(feat)
+            return logits, extras
+        else:
+            feat = self.forward_features(x)
+            return self.classifier(feat)
 
     def project(self, x):
         return F.normalize(self.proj_head(x), dim=-1)
+
 
 class CosineMarginClassifier(nn.Module):
     """Cosine/ArcFace head with optional per-class margins."""

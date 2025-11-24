@@ -19,8 +19,9 @@ from src.plots import (
     plot_inter_intra_distributions,
     plot_tsne_triplet,
     plot_confusion_matrix_heatmap,
+    gates_to_sensor_segment_matrix,
+    plot_topk_sensors,
 )
-
 
 
 def set_seed(seed: int):
@@ -56,7 +57,7 @@ def parse_args():
         "--ratio",
         type=int,
         default=5,
-        help="Target ratio for triplet plots: "
+        help="Target ratio for tsne plots: "
              "normal = ratio * fault, and generated = (ratio-1) * fault.",
     )
 
@@ -73,7 +74,7 @@ def sample_indices(mask, max_n, rng):
 
 
 def build_model_from_ckpt(clf_state, input_dim, cfg, device):
-    # infer architecture from checkpoint
+   
     d_model = clf_state["input_proj.weight"].shape[0]
     input_dim_ckpt = clf_state["input_proj.weight"].shape[1]
     if input_dim != input_dim_ckpt:
@@ -197,12 +198,6 @@ def main():
     best_ckpt = f"{base_dir}/best_state_dict_{ratio}.pt"
     diff_ckpt = f"{base_dir}/diffusion_state_dict_{ratio}.pt"
 
-    if not os.path.exists(best_ckpt):
-        raise FileNotFoundError(f"Missing model file: {best_ckpt}")
-
-    if use_diffusion and not os.path.exists(diff_ckpt):
-        raise FileNotFoundError(f"Missing diffusion file: {diff_ckpt}")
-
 
     if not os.path.exists(best_ckpt):
         raise FileNotFoundError(f"best_state_dict.pt not found at: {best_ckpt}")
@@ -268,7 +263,7 @@ def main():
 
     if acc_values:
         mean_acc = float(np.mean(acc_values))
-        print(f"\nMacro mean accuracy on Testing set: {mean_acc:.4f}")
+        print(f"\nAccuracy on Testing set: {mean_acc:.4f}")
     else:
         print("\nMean accuracy could not be computed (no valid classes).")
 
@@ -282,8 +277,6 @@ def main():
     )
     print(f"Saved confusion matrix to {cm_path}")
 
-
-    print("\n=== Loading Training data for plots ===")
     ff_path_train = "/workspace/TEP_FaultFree_Training.RData"
     ft_path_train = "/workspace/TEP_Faulty_Training.RData"
 
@@ -310,7 +303,6 @@ def main():
 
     feats_all = extract_feats(model, X_all_vis, feat_dim, device)
 
-
     print("\n=== Global t-SNE of all classes ===")
     tsne_all_path = os.path.join(fig_dir, "tsne_all_classes.png")
     plot_embedding(
@@ -323,7 +315,6 @@ def main():
     )
     print(f"Saved global t-SNE to {tsne_all_path}")
 
- 
     print("\n=== Intra vs Inter class distance plot ===")
     C = num_classes
     centers = np.zeros((C, feat_dim), dtype=np.float32)
@@ -336,6 +327,41 @@ def main():
         feats_all, y_all_vis, centers, save_path=inter_intra_path
     )
     print(f"Saved intra vs inter distance plot to {inter_intra_path}")
+
+  
+
+    X_all_vis_tensor = torch.from_numpy(X_all_vis).float().to(device)
+    fault_ids_for_interpret = [3, 9, 15]
+    sensor_names = [f"Var{i+1}" for i in range(X_all_vis.shape[2])]
+    max_windows_per_fault = 512
+
+    for fid in fault_ids_for_interpret:
+        idx_fault = np.where(y_all_vis == fid)[0]
+        if len(idx_fault) == 0:
+            print(f"No windows for fault {fid} in training data, skipping interpretability.")
+            continue
+
+        sel = idx_fault[: min(max_windows_per_fault, len(idx_fault))]
+        xb = X_all_vis_tensor[sel]
+
+        with torch.no_grad():
+            logits, extras = model(xb, return_gates=True)
+
+        # sensor × segment matrix
+        M = gates_to_sensor_segment_matrix(extras, reduce="max")
+
+        out_png = os.path.join(fig_dir, f"gating_top10_fault_{fid}.png")
+        plot_topk_sensors(
+            M,
+            sensor_names=sensor_names,
+            k=10,
+            fault_id=fid,
+            out_png=out_png,
+            label="Mean Gate Weight (across segments)",
+            title_prefix="Top Sensors by Gate Weight",
+        )
+        print(f"Saved top 10 sensor gating plot for fault {fid} to {out_png}")
+
 
 
     ddm = None
@@ -358,12 +384,12 @@ def main():
         ddm.load_state_dict(ddm_state)
         ddm.eval()
     else:
-        print("\nDiffusion disabled in config, triplet plots will not use generated samples.")
+        print("\nDiffusion disabled in config, plots will not use generated samples.")
 
    
     faults_to_plot = [3, 9, 15]
     for fid in faults_to_plot:
-        print(f"\n=== Triplet t-SNE for fault {fid} ===")
+        print(f"\n=== t-SNE for fault {fid} ===")
         gen_feats = None
         if ddm is not None:
             with torch.no_grad():
@@ -389,9 +415,9 @@ def main():
                 seed=args.seed,
                 ratio=args.ratio,
             )
-            print(f"Saved triplet t-SNE for fault {fid} to {save_path}")
+            print(f"Saved t-SNE for fault {fid} to {save_path}")
         except ValueError as e:
-            print(f"Skipping fault {fid} triplet plot: {e}")
+            print(f"Skipping fault {fid} plot: {e}")
 
 
 

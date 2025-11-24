@@ -649,3 +649,75 @@ def plot_confusion_matrix_heatmap(
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close(fig)
+
+
+
+def gates_to_sensor_segment_matrix(extras, reduce="max"):
+    """
+    Convert per-d_model gates into per-sensor × segment weights.
+
+    Approx attribution: weight[f, s] ≈ ∑_d |W_proj[f,d]| * gate[s,d]
+
+    extras:
+        "gates": (B, S, d_model) from model(..., return_gates=True)
+        "W_proj": (d_model, F) input projection matrix
+    """
+    gates = extras["gates"]
+    W_proj = extras["W_proj"]
+
+    if isinstance(gates, torch.Tensor):
+        G = gates.detach().cpu().numpy()
+    else:
+        G = np.asarray(gates)
+
+    if reduce == "max":
+        G = G.max(axis=0)      # (S, d_model)
+    else:
+        G = G.mean(axis=0)     # (S, d_model)
+
+    if isinstance(W_proj, torch.Tensor):
+        Wabs_T = torch.abs(W_proj).T.detach().cpu().numpy()  # (F, d_model)
+    else:
+        Wabs_T = np.abs(np.asarray(W_proj)).T
+
+    # (F, d_model) @ (d_model, S) -> (F, S)
+    M = Wabs_T @ G.T
+    return M
+
+
+def plot_topk_sensors(
+    M,
+    sensor_names=None,
+    k=10,
+    fault_id=None,
+    out_png="results/gating_top10.png",
+    label="Mean gate weight (across segments)",
+    title_prefix="Top sensors by gate weight",
+):
+    """
+    Bar plot of top-k sensors based on average weight across segments.
+
+    M: (F, S) sensor × segment matrix
+    """
+    F, S = M.shape
+    if sensor_names is None:
+        sensor_names = [f"Var{i+1}" for i in range(F)]
+
+    mean_per_sensor = M.mean(axis=1)  # (F,)
+    idx = np.argsort(-mean_per_sensor)[:k]
+    vals = mean_per_sensor[idx][::-1]
+    names = [sensor_names[i] for i in idx][::-1]
+
+    plt.figure(figsize=(8, max(4, 0.4 * k + 2)))
+    plt.barh(np.arange(len(vals)), vals)
+    plt.yticks(np.arange(len(vals)), names)
+    plt.xlabel(label)
+    title = title_prefix
+    if fault_id is not None:
+        title += f" - Fault {fault_id}"
+    plt.title(title)
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
+    plt.savefig(out_png, dpi=300, bbox_inches="tight")
+    plt.close()
+
