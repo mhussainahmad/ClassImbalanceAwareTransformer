@@ -15,7 +15,7 @@ def compute_train_ratio(cfg_path: str, num_fault_classes: int = 20):
 
     # Fault slices
     post_fault_start   = int(dw.get("post_fault_start", 100))
-    per_run_fault_len  = max(0, 500 - post_fault_start)
+    per_run_fault_len  = max(0, 660 - post_fault_start)
 
     tr_start = int(dw.get("train_runs_start", 1))
     tr_end   = int(dw.get("train_runs_end", 25))   # end-exclusive
